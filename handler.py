@@ -13,6 +13,7 @@ import requests
 import runpod
 
 COMFYUI_DIR = Path(os.getenv("COMFYUI_DIR", "/comfyui/ComfyUI"))
+CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 MODELS_DIR = COMFYUI_DIR / "models"
 OUTPUT_DIR = COMFYUI_DIR / "output"
 COMFYUI_HOST = "127.0.0.1"
@@ -34,6 +35,21 @@ ALLOWED_MODEL_TYPES = {
     "diffusion_models",
     "text_encoders",
     "upscale_models",
+}
+
+# Class-type allowlist for controlled custom-node auto-install.
+# Used only for recommendation output when nodes are missing.
+NODE_REPO_ALLOWLIST = {
+    # ComfyUI-VideoHelperSuite
+    "VHS_VideoCombine": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
+    # ComfyUI-MediaMixer
+    "TelegramSender": "https://github.com/DoctorDiffusion/ComfyUI-MediaMixer.git",
+    # ComfyUI-KJNodes (LTX-related and utility nodes)
+    "EmptyLTXVLatentVideo": "https://github.com/kijai/ComfyUI-KJNodes.git",
+    # ComfyUI-GGUF
+    "UnetLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF.git",
+    "DualCLIPLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF.git",
+    "CLIPLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF.git",
 }
 
 _server_lock = threading.Lock()
@@ -77,6 +93,26 @@ def _log_tail(max_lines: int = 120) -> str:
     with COMFYUI_LOG_PATH.open("r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     return "".join(lines[-max_lines:]).strip()
+
+
+def _stop_comfyui() -> None:
+    global _server_log_handle
+    global _server_process
+
+    with _server_lock:
+        if _server_process and _server_process.poll() is None:
+            _server_process.terminate()
+            try:
+                _server_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _server_process.kill()
+                _server_process.wait(timeout=10)
+
+        _server_process = None
+
+        if _server_log_handle is not None:
+            _server_log_handle.close()
+            _server_log_handle = None
 
 
 def _download_model(model: Dict[str, Any]) -> Dict[str, Any]:
@@ -167,9 +203,11 @@ def _start_comfyui() -> None:
                 _server_process.kill()
                 _server_process.wait(timeout=10)
 
-        if _server_log_handle is not None:
-            _server_log_handle.close()
-            _server_log_handle = None
+            _server_process = None
+
+            if _server_log_handle is not None:
+                _server_log_handle.close()
+                _server_log_handle = None
 
         COMFYUI_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         _server_log_handle = COMFYUI_LOG_PATH.open("w", encoding="utf-8")
@@ -208,6 +246,54 @@ def _start_comfyui() -> None:
             "Timed out waiting for ComfyUI to become ready. "
             f"Log tail from {COMFYUI_LOG_PATH}:\n{tail}"
         )
+
+
+def _workflow_class_types(workflow: Dict[str, Any]) -> set[str]:
+    class_types: set[str] = set()
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if isinstance(class_type, str) and class_type.strip():
+            class_types.add(class_type.strip())
+    return class_types
+
+
+def _installed_class_types() -> set[str]:
+    response = requests.get(f"{COMFYUI_API}/object_info", timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise WorkerError("ComfyUI /object_info did not return a JSON object")
+    return set(data.keys())
+
+
+def _check_workflow_nodes(workflow: Dict[str, Any]) -> Dict[str, Any]:
+    required_types = _workflow_class_types(workflow)
+    if not required_types:
+        return {
+            "required_node_types": 0,
+            "suggested_repos": [],
+            "missing_before": [],
+            "unmapped_nodes": [],
+        }
+
+    _start_comfyui()
+    installed_before = _installed_class_types()
+    missing_before = sorted(required_types - installed_before)
+    suggested_repos = sorted(
+        NODE_REPO_ALLOWLIST[node_type]
+        for node_type in missing_before
+        if node_type in NODE_REPO_ALLOWLIST
+    )
+    unresolved = sorted(node_type for node_type in missing_before if node_type not in NODE_REPO_ALLOWLIST)
+
+    return {
+        "required_node_types": len(required_types),
+        "suggested_repos": suggested_repos,
+        "missing_before": missing_before,
+        "unmapped_nodes": unresolved,
+    }
 
 
 def _latest_output_mtime() -> float:
@@ -307,6 +393,17 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
 
         workflow = _validate_workflow(payload.get("workflow"))
         models = _validate_models(payload.get("models"))
+        node_check_report = _check_workflow_nodes(workflow)
+        if node_check_report["missing_before"]:
+            return {
+                "status": "error",
+                "error": (
+                    "Workflow contains missing ComfyUI node class types. "
+                    "Pre-bake the required repos in Dockerfile and rebuild image."
+                ),
+                "node_check_report": node_check_report,
+                "duration_seconds": round(time.time() - started, 2),
+            }
 
         downloaded: List[Dict[str, Any]] = []
         if models:
@@ -335,6 +432,7 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "status": "success",
             "prompt_id": prompt_id,
+            "node_check_report": node_check_report,
             "downloaded_models": downloaded,
             "history_summary_keys": list(history.keys()),
             "duration_seconds": round(time.time() - started, 2),

@@ -2,6 +2,7 @@ import base64
 import json
 import mimetypes
 import os
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -17,6 +18,8 @@ RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 WORKFLOW_PATH = Path("workflow_api.json")
 MODELS_DEFAULTS_PATH = Path("models_defaults.json")
 HF_API = HfApi()
+RUNPOD_STATUS_POLL_TIMEOUT_SECONDS = int(os.getenv("RUNPOD_STATUS_POLL_TIMEOUT_SECONDS", "45"))
+RUNPOD_STATUS_POLL_INTERVAL_SECONDS = float(os.getenv("RUNPOD_STATUS_POLL_INTERVAL_SECONDS", "2"))
 MODEL_FILE_EXTENSIONS = (".safetensors", ".gguf", ".ckpt", ".pt", ".pth", ".bin")
 MODEL_HINT_KEYS = {
     "ckpt_name",
@@ -478,6 +481,51 @@ def submit(payload: dict[str, Any], endpoint_id: str, api_key: str) -> dict[str,
     return data
 
 
+def get_job_status(endpoint_id: str, api_key: str, job_id: str) -> dict[str, Any]:
+    url = f"{RUNPOD_API_BASE}/{endpoint_id}/status/{job_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    response = requests.get(url, headers=headers, timeout=30)
+    if response.status_code >= 400:
+        raise RuntimeError(f"RunPod status API error {response.status_code}: {response.text[:1200]}")
+    return response.json()
+
+
+def format_node_check_report(report: dict[str, Any]) -> str:
+    missing = report.get("missing_before") or []
+    suggested = report.get("suggested_repos") or []
+    unmapped = report.get("unmapped_nodes") or []
+
+    lines = ["Missing ComfyUI Nodes Detected:"]
+    lines.append(f"missing_before: {missing}")
+    lines.append(f"suggested_repos: {suggested}")
+    lines.append(f"unmapped_nodes: {unmapped}")
+    return "\n".join(lines)
+
+
+def poll_for_node_check_report(endpoint_id: str, api_key: str, job_id: str) -> str | None:
+    deadline = time.time() + RUNPOD_STATUS_POLL_TIMEOUT_SECONDS
+    terminal_states = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
+
+    while time.time() < deadline:
+        status_payload = get_job_status(endpoint_id=endpoint_id, api_key=api_key, job_id=job_id)
+        state = str(status_payload.get("status", "")).upper()
+
+        if state in terminal_states:
+            output = status_payload.get("output")
+            if isinstance(output, dict):
+                node_report = output.get("node_check_report")
+                if isinstance(node_report, dict) and (node_report.get("missing_before") or []):
+                    return format_node_check_report(node_report)
+            return None
+
+        time.sleep(RUNPOD_STATUS_POLL_INTERVAL_SECONDS)
+
+    return None
+
+
 def build_startup_status_markdown() -> str:
     warnings: list[str] = []
 
@@ -610,15 +658,33 @@ def trigger_job(
         if not job_id:
             return f"Request sent, but no job id returned. Response: {result}"
 
+        missing_nodes_note = None
+        try:
+            missing_nodes_note = poll_for_node_check_report(
+                endpoint_id=endpoint_id,
+                api_key=api_key,
+                job_id=str(job_id),
+            )
+        except Exception as poll_exc:  # noqa: BLE001
+            missing_nodes_note = f"Node-check polling warning: {poll_exc}"
+
         dashboard = f"https://www.runpod.io/console/serverless/user/endpoints/{endpoint_id}"
         status_api = f"{RUNPOD_API_BASE}/{endpoint_id}/status/{job_id}"
-        return (
+        message = (
             f"Submitted successfully.\n"
             f"Job ID: {job_id}\n"
             f"Validation: {validation_message}\n"
             f"Dashboard: {dashboard}\n"
             f"Status API: {status_api}"
         )
+        if missing_nodes_note:
+            message += f"\n\n{missing_nodes_note}"
+        else:
+            message += (
+                "\n\nNode check report not yet available. "
+                "Open Status API link if the job is still running."
+            )
+        return message
     except Exception as exc:  # noqa: BLE001
         return f"Error: {exc}"
 

@@ -24,7 +24,7 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git
 RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git /comfyui/ComfyUI/custom_nodes/ComfyUI-Manager && \
     git clone --depth=1 https://github.com/city96/ComfyUI-GGUF.git /comfyui/ComfyUI/custom_nodes/ComfyUI-GGUF && \
     git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git /comfyui/ComfyUI/custom_nodes/ComfyUI-KJNodes && \
-    git clone --depth=1 https://github.com/kijai/ComfyUI-MediaMixer.git /comfyui/ComfyUI/custom_nodes/ComfyUI-MediaMixer && \
+    git clone --depth=1 https://github.com/DoctorDiffusion/ComfyUI-MediaMixer.git /comfyui/ComfyUI/custom_nodes/ComfyUI-MediaMixer && \
     git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /comfyui/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite
 
 RUN python -m pip install --upgrade pip setuptools wheel && \
