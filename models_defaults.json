@@ -1,0 +1,12 @@
+[
+  {
+    "type": "diffusion_models",
+    "name": "ltx-video-2.3-q8_0.gguf",
+    "url": "https://huggingface.co/city96/LTX-Video-2.3-GGUF/resolve/main/ltx-video-2.3-q8_0.gguf"
+  },
+  {
+    "type": "text_encoders",
+    "name": "gemma-3-text-encoder.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Gemma-3-Text-Encoder/resolve/main/gemma-3-text-encoder.safetensors"
+  }
+]

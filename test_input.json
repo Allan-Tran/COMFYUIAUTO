@@ -1,0 +1,129 @@
+{
+  "input": {
+    "prompt_timeout_seconds": 7200,
+    "output_settle_seconds": 5,
+    "output_settle_timeout_seconds": 180,
+    "models": [
+      {
+        "type": "checkpoints",
+        "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.safetensors",
+        "name": "ltx-video-2b-v0.9.safetensors"
+      },
+      {
+        "type": "vae",
+        "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-vae-v0.9.safetensors",
+        "name": "ltx-video-2b-vae-v0.9.safetensors"
+      }
+    ],
+    "workflow": {
+      "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "ltx-video-2b-v0.9.safetensors"
+        }
+      },
+      "2": {
+        "class_type": "VAELoader",
+        "inputs": {
+          "vae_name": "ltx-video-2b-vae-v0.9.safetensors"
+        }
+      },
+      "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "cinematic aerial shot of waves at sunrise, smooth camera movement",
+          "clip": [
+            "1",
+            1
+          ]
+        }
+      },
+      "4": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "low quality, blurry, artifacts",
+          "clip": [
+            "1",
+            1
+          ]
+        }
+      },
+      "5": {
+        "class_type": "EmptyLTXVLatentVideo",
+        "inputs": {
+          "width": 768,
+          "height": 432,
+          "length": 97,
+          "batch_size": 1
+        }
+      },
+      "6": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 42,
+          "steps": 30,
+          "cfg": 3,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": [
+            "1",
+            0
+          ],
+          "positive": [
+            "3",
+            0
+          ],
+          "negative": [
+            "4",
+            0
+          ],
+          "latent_image": [
+            "5",
+            0
+          ]
+        }
+      },
+      "7": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": [
+            "6",
+            0
+          ],
+          "vae": [
+            "2",
+            0
+          ]
+        }
+      },
+      "8": {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+          "images": [
+            "7",
+            0
+          ],
+          "frame_rate": 24,
+          "format": "video/h264-mp4",
+          "pix_fmt": "yuv420p",
+          "crf": 20,
+          "save_output": true,
+          "filename_prefix": "runpod_ltx_video"
+        }
+      },
+      "99": {
+        "class_type": "TelegramSender",
+        "inputs": {
+          "trigger": [
+            "8",
+            0
+          ],
+          "bot_token": "1234567890:REPLACE_WITH_YOUR_BOT_TOKEN",
+          "chat_id": "REPLACE_WITH_YOUR_CHAT_ID",
+          "caption": "RunPod render completed"
+        }
+      }
+    }
+  }
+}

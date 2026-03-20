@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Local browser bundle/runtime files
+Browser/

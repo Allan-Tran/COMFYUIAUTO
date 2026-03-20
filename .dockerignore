@@ -1,0 +1,7 @@
+Browser/
+*.md
+test_input.json
+__pycache__/
+*.pyc
+.git/
+.gitignore
