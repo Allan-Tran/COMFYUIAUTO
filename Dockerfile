@@ -24,19 +24,21 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git
 RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git /comfyui/ComfyUI/custom_nodes/ComfyUI-Manager && \
     git clone --depth=1 https://github.com/city96/ComfyUI-GGUF.git /comfyui/ComfyUI/custom_nodes/ComfyUI-GGUF && \
     git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git /comfyui/ComfyUI/custom_nodes/ComfyUI-KJNodes && \
+    git clone --depth=1 https://github.com/matan1905/ComfyUI-Serving-Toolkit.git /comfyui/ComfyUI/custom_nodes/ComfyUI-Serving-Toolkit && \
     git clone --depth=1 https://github.com/DoctorDiffusion/ComfyUI-MediaMixer.git /comfyui/ComfyUI/custom_nodes/ComfyUI-MediaMixer && \
     git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /comfyui/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite
 
 RUN python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install -r /comfyui/ComfyUI/requirements.txt runpod requests
+    python -m pip install -r /comfyui/ComfyUI/requirements.txt runpod requests python-telegram-bot
 
 RUN set -eux; \
     for req in \
       /comfyui/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt \
       /comfyui/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt \
       /comfyui/ComfyUI/custom_nodes/ComfyUI-KJNodes/requirements.txt \
-            /comfyui/ComfyUI/custom_nodes/ComfyUI-MediaMixer/requirements.txt \
-            /comfyui/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt; do \
+      /comfyui/ComfyUI/custom_nodes/ComfyUI-Serving-Toolkit/requirements.txt \
+      /comfyui/ComfyUI/custom_nodes/ComfyUI-MediaMixer/requirements.txt \
+      /comfyui/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt; do \
       if [ -f "$req" ]; then python -m pip install -r "$req"; fi; \
     done
 
@@ -50,8 +52,9 @@ RUN mkdir -p /comfyui/ComfyUI/models/checkpoints \
     /comfyui/ComfyUI/models/diffusion_models \
     /comfyui/ComfyUI/models/text_encoders \
     /comfyui/ComfyUI/models/upscale_models \
-    /comfyui/ComfyUI/output
+    /comfyui/ComfyUI/output && \
+    ln -sfn /comfyui/ComfyUI/output /comfyui/output
 
-COPY handler.py /comfyui/handler.py
+COPY rp_handler.py /comfyui/rp_handler.py
 
-CMD ["python", "-u", "handler.py"]
+CMD ["python", "-u", "rp_handler.py"]

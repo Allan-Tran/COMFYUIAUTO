@@ -42,8 +42,8 @@ ALLOWED_MODEL_TYPES = {
 NODE_REPO_ALLOWLIST = {
     # ComfyUI-VideoHelperSuite
     "VHS_VideoCombine": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
-    # ComfyUI-MediaMixer
-    "TelegramSender": "https://github.com/DoctorDiffusion/ComfyUI-MediaMixer.git",
+    # ComfyUI-Serving-Toolkit
+    "TelegramSender": "https://github.com/matan1905/ComfyUI-Serving-Toolkit.git",
     # ComfyUI-KJNodes (LTX-related and utility nodes)
     "EmptyLTXVLatentVideo": "https://github.com/kijai/ComfyUI-KJNodes.git",
     # ComfyUI-GGUF

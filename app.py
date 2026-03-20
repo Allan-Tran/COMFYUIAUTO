@@ -51,15 +51,20 @@ MODEL_TYPE_CHOICES = [
 ]
 
 # Optional node mapping via .env for direct assignment.
-POSITIVE_NODE_ID = os.getenv("POSITIVE_NODE_ID", "3")
+POSITIVE_NODE_ID = os.getenv("POSITIVE_NODE_ID", "")
 POSITIVE_INPUT_KEY = os.getenv("POSITIVE_INPUT_KEY", "text")
-NEGATIVE_NODE_ID = os.getenv("NEGATIVE_NODE_ID", "4")
+NEGATIVE_NODE_ID = os.getenv("NEGATIVE_NODE_ID", "")
 NEGATIVE_INPUT_KEY = os.getenv("NEGATIVE_INPUT_KEY", "text")
-LENGTH_NODE_ID = os.getenv("LENGTH_NODE_ID", "5")
+LENGTH_NODE_ID = os.getenv("LENGTH_NODE_ID", "")
 LENGTH_INPUT_KEY = os.getenv("LENGTH_INPUT_KEY", "length")
 I2V_NODE_ID = os.getenv("I2V_NODE_ID", "")
 I2V_INPUT_KEY = os.getenv("I2V_INPUT_KEY", "image_base64")
 TELEGRAM_NODE_ID = os.getenv("TELEGRAM_NODE_ID", "")
+TELEGRAM_INJECT_REQUIRED = os.getenv("TELEGRAM_INJECT_REQUIRED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 # Placeholder strategy works even if node IDs change.
 PLACEHOLDERS = {
@@ -407,7 +412,56 @@ def load_workflow() -> dict[str, Any]:
     raise RuntimeError("workflow_api.json must be a JSON object or include input.workflow")
 
 
-def resolve_telegram_node_id(workflow: dict[str, Any]) -> str:
+def _find_node_id_by_class_title(workflow: dict[str, Any], class_type: str, title_keyword: str) -> str | None:
+    title_matches: list[str] = []
+    class_matches: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("class_type", "")).strip() != class_type:
+            continue
+        class_matches.append(node_id)
+        meta = node.get("_meta")
+        title = ""
+        if isinstance(meta, dict):
+            title = str(meta.get("title", "")).lower()
+        if title_keyword.lower() in title:
+            title_matches.append(node_id)
+
+    if len(title_matches) == 1:
+        return title_matches[0]
+    if len(class_matches) == 1:
+        return class_matches[0]
+    return None
+
+
+def _detect_length_node_id(workflow: dict[str, Any]) -> str | None:
+    candidates: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if "length" in inputs:
+            candidates.append(node_id)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def resolve_prompt_node_ids(workflow: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    positive_node_id = POSITIVE_NODE_ID or _find_node_id_by_class_title(
+        workflow, class_type="CLIPTextEncode", title_keyword="positive"
+    )
+    negative_node_id = NEGATIVE_NODE_ID or _find_node_id_by_class_title(
+        workflow, class_type="CLIPTextEncode", title_keyword="negative"
+    )
+    length_node_id = LENGTH_NODE_ID or _detect_length_node_id(workflow)
+    return positive_node_id, negative_node_id, length_node_id
+
+
+def resolve_telegram_node_id(workflow: dict[str, Any]) -> str | None:
     if TELEGRAM_NODE_ID:
         if TELEGRAM_NODE_ID not in workflow:
             raise RuntimeError(f"TELEGRAM_NODE_ID {TELEGRAM_NODE_ID!r} was not found in workflow")
@@ -421,9 +475,13 @@ def resolve_telegram_node_id(workflow: dict[str, Any]) -> str:
     if len(sender_ids) == 1:
         return sender_ids[0]
     if len(sender_ids) > 1:
-        raise RuntimeError("Multiple TelegramSender nodes found. Set TELEGRAM_NODE_ID in .env.")
+        if TELEGRAM_INJECT_REQUIRED:
+            raise RuntimeError("Multiple TelegramSender nodes found. Set TELEGRAM_NODE_ID in .env.")
+        return None
 
-    raise RuntimeError("TelegramSender node not found. Set TELEGRAM_NODE_ID in .env.")
+    if TELEGRAM_INJECT_REQUIRED:
+        raise RuntimeError("TelegramSender node not found. Set TELEGRAM_NODE_ID in .env.")
+    return None
 
 
 def set_node_input(workflow: dict[str, Any], node_id: str, input_key: str, value: Any) -> None:
@@ -550,11 +608,17 @@ def build_startup_status_markdown() -> str:
         warnings.append(str(exc))
 
     if workflow is not None:
+        positive_node_id, negative_node_id, length_node_id = resolve_prompt_node_ids(workflow)
         for node_id, input_key, label in [
-            (POSITIVE_NODE_ID, POSITIVE_INPUT_KEY, "POSITIVE"),
-            (NEGATIVE_NODE_ID, NEGATIVE_INPUT_KEY, "NEGATIVE"),
-            (LENGTH_NODE_ID, LENGTH_INPUT_KEY, "LENGTH"),
+            (positive_node_id, POSITIVE_INPUT_KEY, "POSITIVE"),
+            (negative_node_id, NEGATIVE_INPUT_KEY, "NEGATIVE"),
+            (length_node_id, LENGTH_INPUT_KEY, "LENGTH"),
         ]:
+            if not node_id:
+                warnings.append(
+                    f"Could not auto-detect {label} node. Set {label}_NODE_ID in .env for this workflow."
+                )
+                continue
             node = workflow.get(node_id)
             if not isinstance(node, dict):
                 warnings.append(f"{label}_NODE_ID={node_id!r} not found in workflow")
@@ -577,7 +641,9 @@ def build_startup_status_markdown() -> str:
                     )
 
         try:
-            resolve_telegram_node_id(workflow)
+            telegram_node_id = resolve_telegram_node_id(workflow)
+            if TELEGRAM_INJECT_REQUIRED and not telegram_node_id:
+                warnings.append("TELEGRAM_INJECT_REQUIRED=true but TelegramSender node is missing")
         except Exception as exc:  # noqa: BLE001
             warnings.append(str(exc))
 
@@ -607,11 +673,17 @@ def trigger_job(
         telegram_chat_id = require_env("TELEGRAM_CHAT_ID")
 
         workflow = _parse_workflow_from_input(workflow_file_path, workflow_json_text)
+        positive_node_id, negative_node_id, length_node_id = resolve_prompt_node_ids(workflow)
 
         # Direct node-id injection path.
-        set_node_input(workflow, POSITIVE_NODE_ID, POSITIVE_INPUT_KEY, positive_prompt)
-        set_node_input(workflow, NEGATIVE_NODE_ID, NEGATIVE_INPUT_KEY, negative_prompt)
-        set_node_input(workflow, LENGTH_NODE_ID, LENGTH_INPUT_KEY, int(frame_length))
+        if not positive_node_id or not negative_node_id or not length_node_id:
+            raise RuntimeError(
+                "Could not resolve prompt node IDs automatically. Set POSITIVE_NODE_ID, "
+                "NEGATIVE_NODE_ID, and LENGTH_NODE_ID in .env for this workflow."
+            )
+        set_node_input(workflow, positive_node_id, POSITIVE_INPUT_KEY, positive_prompt)
+        set_node_input(workflow, negative_node_id, NEGATIVE_INPUT_KEY, negative_prompt)
+        set_node_input(workflow, length_node_id, LENGTH_INPUT_KEY, int(frame_length))
 
         image_b64 = image_to_data_uri(image_path)
         if image_b64 and I2V_NODE_ID:
@@ -619,8 +691,9 @@ def trigger_job(
 
         # Telegram credentials are injected at request time so they are never stored in workflow_api.json.
         telegram_node_id = resolve_telegram_node_id(workflow)
-        set_node_input(workflow, telegram_node_id, "bot_token", telegram_bot_token)
-        set_node_input(workflow, telegram_node_id, "chat_id", telegram_chat_id)
+        if telegram_node_id:
+            set_node_input(workflow, telegram_node_id, "bot_token", telegram_bot_token)
+            set_node_input(workflow, telegram_node_id, "chat_id", telegram_chat_id)
 
         # Placeholder replacement fallback for workflows built with tokens.
         context = {
