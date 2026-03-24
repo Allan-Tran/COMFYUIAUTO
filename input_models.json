@@ -1,0 +1,42 @@
+[
+  {
+    "type": "unet",
+    "name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+  },
+  {
+    "type": "unet",
+    "name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
+  },
+  {
+    "type": "clip",
+    "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "url": "https://huggingface.co/Osrivers/umt5_xxl_fp8_e4m3fn_scaled.safetensors/resolve/main/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+  },
+  {
+    "type": "vae",
+    "name": "wan_2.1_vae.safetensors",
+    "url": "https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/resolve/main/wan_2.1_vae.safetensors"
+  },
+  {
+    "type": "loras",
+    "name": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+    "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/main/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors"
+  },
+  {
+    "type": "loras",
+    "name": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+    "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/main/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors"
+  },
+  {
+    "type": "loras",
+    "name": "DR34ML4Y_I2V_14B_HIGH_V2.safetensors",
+    "url": "https://huggingface.co/SlartyG/DR34ML4Y_I2V_14B_HIGH_V2/resolve/main/DR34ML4Y_I2V_14B_HIGH_V2.safetensors"
+  },
+  {
+    "type": "loras",
+    "name": "DR34ML4Y_I2V_14B_LOW_V2.safetensors",
+    "url": "https://huggingface.co/SlartyG/DR34ML4Y_I2V_14B_LOW_V2/resolve/main/DR34ML4Y_I2V_14B_LOW_V2.safetensors"
+  }
+]

@@ -1,0 +1,46 @@
+{
+  "input": {
+    "prompt_timeout_seconds": 300,
+    "telegram_caption": "Local smoke test: ComfyUI -> Telegram",
+    "models": [],
+    "workflow": {
+      "1": {
+        "inputs": {
+          "image": "blank_test.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+          "title": "Load Image"
+        }
+      },
+      "2": {
+        "inputs": {
+          "fps": 8,
+          "images": [
+            "1",
+            0
+          ]
+        },
+        "class_type": "CreateVideo",
+        "_meta": {
+          "title": "Create Video"
+        }
+      },
+      "3": {
+        "inputs": {
+          "filename_prefix": "video/telegram_smoke",
+          "format": "mp4",
+          "codec": "h264",
+          "video": [
+            "2",
+            0
+          ]
+        },
+        "class_type": "SaveVideo",
+        "_meta": {
+          "title": "Save Video"
+        }
+      }
+    }
+  }
+}

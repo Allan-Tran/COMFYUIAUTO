@@ -1,0 +1,32 @@
+{
+  "input": {
+    "prompt_timeout_seconds": 300,
+    "models": [],
+    "workflow": {
+      "1": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "blank_test.png"
+        }
+      },
+      "2": {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+          "images": [
+            "1",
+            0
+          ],
+          "frame_rate": 8,
+          "loop_count": 0,
+          "filename_prefix": "video/local_smoke",
+          "format": "video/h264-mp4",
+          "pix_fmt": "yuv420p",
+          "crf": 28,
+          "save_metadata": false,
+          "pingpong": false,
+          "save_output": true
+        }
+      }
+    }
+  }
+}

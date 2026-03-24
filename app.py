@@ -17,6 +17,7 @@ load_dotenv(override=False)
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 WORKFLOW_PATH = Path("workflow_api.json")
 MODELS_DEFAULTS_PATH = Path("models_defaults.json")
+MODELS_JSON_PATH = Path(os.getenv("MODELS_JSON_PATH", "input_models.json"))
 HF_API = HfApi()
 RUNPOD_STATUS_POLL_TIMEOUT_SECONDS = int(os.getenv("RUNPOD_STATUS_POLL_TIMEOUT_SECONDS", "45"))
 RUNPOD_STATUS_POLL_INTERVAL_SECONDS = float(os.getenv("RUNPOD_STATUS_POLL_INTERVAL_SECONDS", "2"))
@@ -86,15 +87,15 @@ def require_env(name: str) -> str:
 
 def load_default_models() -> list[dict[str, str]]:
     if not MODELS_DEFAULTS_PATH.exists():
-        raise RuntimeError(f"models_defaults.json not found at {MODELS_DEFAULTS_PATH}")
+        return []
 
     try:
         raw = json.loads(MODELS_DEFAULTS_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON in {MODELS_DEFAULTS_PATH}: {exc}") from exc
 
-    if not isinstance(raw, list) or not raw:
-        raise RuntimeError("models_defaults.json must be a non-empty list")
+    if not isinstance(raw, list):
+        raise RuntimeError("models_defaults.json must be a list")
 
     models: list[dict[str, str]] = []
     for idx, item in enumerate(raw):
@@ -105,6 +106,34 @@ def load_default_models() -> list[dict[str, str]]:
         url = str(item.get("url", "")).strip()
         if not model_type or not name or not url:
             raise RuntimeError(f"models_defaults.json[{idx}] requires type, name, and url")
+        models.append({"type": model_type, "name": name, "url": url})
+
+    return models
+
+
+def load_models_from_json_file(models_path: Path) -> list[dict[str, str]]:
+    if not models_path.exists():
+        return []
+
+    try:
+        raw = json.loads(models_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON in {models_path}: {exc}") from exc
+
+    if not isinstance(raw, list):
+        raise RuntimeError(f"{models_path} must be a JSON list")
+
+    models: list[dict[str, str]] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{models_path}[{idx}] must be an object")
+        model_type = str(item.get("type", "")).strip()
+        name = str(item.get("name", "")).strip()
+        url = str(item.get("url", "")).strip()
+        if not model_type or not name or not url:
+            raise RuntimeError(f"{models_path}[{idx}] requires type, name, and url")
+        if "replace-me" in url or "example.com" in url:
+            raise RuntimeError(f"{models_path}[{idx}] has placeholder url for {name}: {url}")
         models.append({"type": model_type, "name": name, "url": url})
 
     return models
@@ -184,6 +213,109 @@ def _collect_model_candidates(value: Any, path: str, out: list[dict[str, str]], 
         query = _normalize_model_query(value)
         if query:
             out.append({"query": query, "value": value, "path": path, "key": key_hint})
+
+
+def _guess_model_type_from_key(key_hint: str) -> str:
+    key_lower = (key_hint or "").lower()
+    if "vae" in key_lower:
+        return "vae"
+    if "lora" in key_lower:
+        return "loras"
+    if "control" in key_lower:
+        return "controlnet"
+    if "clip_vision" in key_lower:
+        return "clip_vision"
+    if "clip" in key_lower:
+        return "clip"
+    if "text_encoder" in key_lower or "t5" in key_lower:
+        return "text_encoders"
+    if "unet" in key_lower:
+        return "unet"
+    if "upscale" in key_lower:
+        return "upscale_models"
+    return "diffusion_models"
+
+
+def _resolve_hf_url_for_filename(file_name: str) -> str | None:
+    token = get_hf_token() or None
+    try:
+        repos = [m.id for m in HF_API.list_models(search=file_name, limit=10)]
+    except Exception:
+        return None
+
+    lowered = file_name.lower()
+    for repo_id in repos:
+        try:
+            files = HF_API.list_repo_files(repo_id=repo_id, repo_type="model", token=token)
+        except Exception:
+            continue
+        for path in files:
+            if Path(path).name.lower() == lowered:
+                return build_hf_resolve_url(repo_id, path)
+    return None
+
+
+def auto_build_models_from_workflow(
+    uploaded_file_path: str | None,
+    pasted_json: str,
+) -> tuple[list[dict[str, str]], str, str]:
+    try:
+        workflow = _parse_workflow_from_input(uploaded_file_path, pasted_json)
+    except Exception as exc:  # noqa: BLE001
+        return [], "[]", f"Red Alert: {exc}"
+
+    raw_hits: list[dict[str, str]] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        _collect_model_candidates(inputs, path=f"node[{node_id}].inputs", out=raw_hits)
+
+    # Deduplicate by (key, filename) to reduce duplicate URL lookups.
+    unique: dict[tuple[str, str], dict[str, str]] = {}
+    for hit in raw_hits:
+        name = Path(hit["value"]).name
+        if not name:
+            continue
+        unique[(hit.get("key", ""), name)] = hit
+
+    if not unique:
+        return [], "[]", "No model-like references found to auto-build input.models."
+
+    included_names = set()
+    try:
+        included_names = {
+            Path(str(model.get("name", ""))).name.lower()
+            for model in load_models_from_json_file(MODELS_JSON_PATH)
+            if str(model.get("name", "")).strip()
+        }
+    except Exception:
+        included_names = set()
+
+    models: list[dict[str, str]] = []
+    unresolved: list[str] = []
+    for hit in sorted(unique.values(), key=lambda h: Path(h["value"]).name.lower()):
+        model_name = Path(hit["value"]).name
+        url = _resolve_hf_url_for_filename(model_name)
+        if not url:
+            if model_name.lower() not in included_names:
+                unresolved.append(model_name)
+            continue
+        models.append(
+            {
+                "type": _guess_model_type_from_key(hit.get("key", "")),
+                "name": model_name,
+                "url": url,
+            }
+        )
+
+    preview = json.dumps(models, indent=2)
+    status = f"Auto-built {len(models)} model entries from workflow references."
+    if unresolved:
+        status += f" Unresolved filenames: {sorted(set(unresolved))}"
+    return models, preview, status
 
 
 def scan_workflow_for_models(
@@ -327,7 +459,7 @@ def validate_selected_model(
     min_size_gb: float,
 ) -> tuple[bool, str, dict[str, str] | None]:
     if not selected_label:
-        return True, "No custom model selected. Using defaults from models_defaults.json.", None
+        return True, "No custom model selected.", None
 
     if not isinstance(search_state, dict) or selected_label not in search_state:
         return False, "Red Alert: selected model is missing. Click Search Models again.", None
@@ -394,6 +526,18 @@ def upsert_model(models: list[dict[str, str]], new_model: dict[str, str]) -> lis
             updated[idx] = new_model
             return updated
     updated.append(new_model)
+    return updated
+
+
+def append_unique_models(models: list[dict[str, str]], additions: list[dict[str, str]]) -> list[dict[str, str]]:
+    updated = [dict(item) for item in models]
+    seen = {(str(m.get("type")), str(m.get("name")), str(m.get("url"))) for m in updated}
+    for item in additions:
+        key = (str(item.get("type")), str(item.get("name")), str(item.get("url")))
+        if key in seen:
+            continue
+        updated.append({"type": key[0], "name": key[1], "url": key[2]})
+        seen.add(key)
     return updated
 
 
@@ -524,6 +668,63 @@ def image_to_data_uri(image_path: str | None) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+def data_uri_to_base64(data_uri: str) -> str:
+    value = (data_uri or "").strip()
+    marker = ";base64,"
+    if not value:
+        return ""
+    if value.startswith("data:") and marker in value:
+        return value.split(marker, 1)[1]
+    return value
+
+
+def resolve_easy_load_image_base64_node_id(workflow: dict[str, Any]) -> str | None:
+    candidates: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type", "")).strip()
+        if class_type != "easy loadImageBase64":
+            continue
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict) and "base64_data" in inputs:
+            candidates.append(node_id)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def validate_workflow_runtime_compat(workflow: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type", "")).strip()
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        if class_type == "LoraLoader":
+            if "model" not in inputs:
+                issues.append(f"node {node_id} (LoraLoader): missing required input 'model'")
+            if "clip" not in inputs:
+                issues.append(f"node {node_id} (LoraLoader): missing required input 'clip'")
+
+        if class_type == "KSamplerAdvanced":
+            add_noise = inputs.get("add_noise")
+            if add_noise not in {"enable", "disable"}:
+                issues.append(
+                    f"node {node_id} (KSamplerAdvanced): add_noise must be 'enable' or 'disable'"
+                )
+            for key in ("noise_seed", "start_at_step", "end_at_step", "steps"):
+                if not isinstance(inputs.get(key), int):
+                    issues.append(f"node {node_id} (KSamplerAdvanced): {key} must be an integer")
+            if not isinstance(inputs.get("cfg"), (int, float)):
+                issues.append(f"node {node_id} (KSamplerAdvanced): cfg must be numeric")
+
+    return issues
+
+
 def submit(payload: dict[str, Any], endpoint_id: str, api_key: str) -> dict[str, Any]:
     url = f"{RUNPOD_API_BASE}/{endpoint_id}/run"
     headers = {
@@ -563,7 +764,16 @@ def format_node_check_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def poll_for_node_check_report(endpoint_id: str, api_key: str, job_id: str) -> str | None:
+def _clip_text(text: Any, limit: int = 2400) -> str:
+    if text is None:
+        return ""
+    value = str(text)
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...<truncated>"
+
+
+def poll_for_terminal_status(endpoint_id: str, api_key: str, job_id: str) -> dict[str, Any] | None:
     deadline = time.time() + RUNPOD_STATUS_POLL_TIMEOUT_SECONDS
     terminal_states = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
 
@@ -572,12 +782,7 @@ def poll_for_node_check_report(endpoint_id: str, api_key: str, job_id: str) -> s
         state = str(status_payload.get("status", "")).upper()
 
         if state in terminal_states:
-            output = status_payload.get("output")
-            if isinstance(output, dict):
-                node_report = output.get("node_check_report")
-                if isinstance(node_report, dict) and (node_report.get("missing_before") or []):
-                    return format_node_check_report(node_report)
-            return None
+            return status_payload
 
         time.sleep(RUNPOD_STATUS_POLL_INTERVAL_SECONDS)
 
@@ -607,7 +812,15 @@ def build_startup_status_markdown() -> str:
     except Exception as exc:  # noqa: BLE001
         warnings.append(str(exc))
 
+    try:
+        load_models_from_json_file(MODELS_JSON_PATH)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(str(exc))
+
     if workflow is not None:
+        runtime_issues = validate_workflow_runtime_compat(workflow)
+        warnings.extend(runtime_issues)
+
         positive_node_id, negative_node_id, length_node_id = resolve_prompt_node_ids(workflow)
         for node_id, input_key, label in [
             (positive_node_id, POSITIVE_INPUT_KEY, "POSITIVE"),
@@ -665,6 +878,8 @@ def trigger_job(
     selected_model_type: str,
     min_model_size_gb: float,
     search_state: dict[str, dict[str, Any]],
+    use_auto_models: bool,
+    auto_models_state: list[dict[str, str]],
 ) -> str:
     try:
         api_key = require_env("RUNPOD_API_KEY")
@@ -685,9 +900,15 @@ def trigger_job(
         set_node_input(workflow, negative_node_id, NEGATIVE_INPUT_KEY, negative_prompt)
         set_node_input(workflow, length_node_id, LENGTH_INPUT_KEY, int(frame_length))
 
-        image_b64 = image_to_data_uri(image_path)
-        if image_b64 and I2V_NODE_ID:
-            set_node_input(workflow, I2V_NODE_ID, I2V_INPUT_KEY, image_b64)
+        image_b64_data_uri = image_to_data_uri(image_path)
+        image_b64_raw = data_uri_to_base64(image_b64_data_uri)
+        if image_b64_data_uri and I2V_NODE_ID:
+            value = image_b64_raw if I2V_INPUT_KEY == "base64_data" else image_b64_data_uri
+            set_node_input(workflow, I2V_NODE_ID, I2V_INPUT_KEY, value)
+
+        easy_load_image_node_id = resolve_easy_load_image_base64_node_id(workflow)
+        if image_b64_raw and easy_load_image_node_id:
+            set_node_input(workflow, easy_load_image_node_id, "base64_data", image_b64_raw)
 
         # Telegram credentials are injected at request time so they are never stored in workflow_api.json.
         telegram_node_id = resolve_telegram_node_id(workflow)
@@ -702,10 +923,22 @@ def trigger_job(
             "frame_length": str(int(frame_length)),
             "telegram_bot_token": telegram_bot_token,
             "telegram_chat_id": telegram_chat_id,
-            "image_b64": image_b64,
+            "image_b64": image_b64_data_uri,
         }
         workflow = replace_placeholders(workflow, context)
+        runtime_issues = validate_workflow_runtime_compat(workflow)
+        if runtime_issues:
+            issues_block = "\n- " + "\n- ".join(runtime_issues)
+            return "Red Alert: workflow validation failed before submit." + issues_block
+
         models = load_default_models()
+
+        file_models = load_models_from_json_file(MODELS_JSON_PATH)
+        if file_models:
+            models = append_unique_models(models, file_models)
+
+        if use_auto_models and isinstance(auto_models_state, list):
+            models = append_unique_models(models, auto_models_state)
 
         is_valid, validation_message, custom_model = validate_selected_model(
             selected_label=selected_model_label,
@@ -731,15 +964,20 @@ def trigger_job(
         if not job_id:
             return f"Request sent, but no job id returned. Response: {result}"
 
-        missing_nodes_note = None
+        terminal_status = None
         try:
-            missing_nodes_note = poll_for_node_check_report(
+            terminal_status = poll_for_terminal_status(
                 endpoint_id=endpoint_id,
                 api_key=api_key,
                 job_id=str(job_id),
             )
         except Exception as poll_exc:  # noqa: BLE001
-            missing_nodes_note = f"Node-check polling warning: {poll_exc}"
+            terminal_status = {
+                "status": "UNKNOWN",
+                "output": {
+                    "error": f"Status polling warning: {poll_exc}",
+                },
+            }
 
         dashboard = f"https://www.runpod.io/console/serverless/user/endpoints/{endpoint_id}"
         status_api = f"{RUNPOD_API_BASE}/{endpoint_id}/status/{job_id}"
@@ -750,12 +988,35 @@ def trigger_job(
             f"Dashboard: {dashboard}\n"
             f"Status API: {status_api}"
         )
-        if missing_nodes_note:
-            message += f"\n\n{missing_nodes_note}"
+
+        if isinstance(terminal_status, dict):
+            final_state = str(terminal_status.get("status", "")).upper() or "UNKNOWN"
+            message += f"\n\nFinal State: {final_state}"
+
+            output = terminal_status.get("output") if isinstance(terminal_status.get("output"), dict) else {}
+
+            node_report = output.get("node_check_report") if isinstance(output, dict) else None
+            if isinstance(node_report, dict) and (node_report.get("missing_before") or []):
+                message += f"\n\n{format_node_check_report(node_report)}"
+
+            if final_state in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+                runtime_hint = _clip_text(output.get("runtime_hint"))
+                error_text = _clip_text(output.get("error"))
+                traceback_text = _clip_text(output.get("traceback"))
+                comfy_tail = _clip_text(output.get("comfyui_log_tail"))
+
+                if runtime_hint:
+                    message += f"\n\nRuntime Hint:\n{runtime_hint}"
+                if error_text:
+                    message += f"\n\nError:\n{error_text}"
+                if traceback_text:
+                    message += f"\n\nTraceback:\n{traceback_text}"
+                if comfy_tail:
+                    message += f"\n\nComfyUI Log Tail:\n{comfy_tail}"
         else:
             message += (
-                "\n\nNode check report not yet available. "
-                "Open Status API link if the job is still running."
+                "\n\nNo terminal job status yet (still running or polling timeout). "
+                "Open Status API link for live updates."
             )
         return message
     except Exception as exc:  # noqa: BLE001
@@ -790,6 +1051,7 @@ with gr.Blocks(title="RunPod ComfyUI Command Center") as demo:
     refresh_status_btn = gr.Button("Refresh Startup Check")
     search_state = gr.State({})
     workflow_scan_state = gr.State({})
+    auto_models_state = gr.State([])
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -827,6 +1089,7 @@ with gr.Blocks(title="RunPod ComfyUI Command Center") as demo:
                     placeholder="Paste workflow_api.json content here if you do not want to upload a file.",
                 )
                 scan_workflow_btn = gr.Button("Scan Workflow Models")
+                auto_models_btn = gr.Button("Auto-Build input.models From Workflow")
                 workflow_models = gr.Dropdown(
                     label="Discovered Workflow Models",
                     choices=[],
@@ -854,12 +1117,21 @@ with gr.Blocks(title="RunPod ComfyUI Command Center") as demo:
                     choices=MODEL_TYPE_CHOICES,
                     value="diffusion_models",
                 )
+                use_auto_models = gr.Checkbox(
+                    label="Use auto-built workflow models in payload",
+                    value=True,
+                )
                 min_size_gb = gr.Slider(
                     label="Minimum Model Size (GB) for pre-flight check",
                     minimum=1,
                     maximum=40,
                     step=1,
                     value=10,
+                )
+                auto_models_preview = gr.Textbox(
+                    label="Auto-built input.models preview",
+                    interactive=False,
+                    lines=8,
                 )
                 search_status = gr.Textbox(
                     label="Model Search / Validation Notes",
@@ -890,6 +1162,8 @@ with gr.Blocks(title="RunPod ComfyUI Command Center") as demo:
             selected_model_type,
             min_size_gb,
             search_state,
+            use_auto_models,
+            auto_models_state,
         ],
         outputs=[status_box],
     )
@@ -904,6 +1178,12 @@ with gr.Blocks(title="RunPod ComfyUI Command Center") as demo:
         fn=scan_workflow_for_models,
         inputs=[workflow_file, workflow_json_text],
         outputs=[workflow_models, workflow_scan_state, scan_status],
+    )
+
+    auto_models_btn.click(
+        fn=auto_build_models_from_workflow,
+        inputs=[workflow_file, workflow_json_text],
+        outputs=[auto_models_state, auto_models_preview, search_status],
     )
 
     search_selected_workflow_btn.click(

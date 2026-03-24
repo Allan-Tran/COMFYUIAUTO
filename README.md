@@ -4,7 +4,7 @@ Production-focused RunPod Serverless worker for ComfyUI with on-demand model dow
 
 ## Included
 
-- Base image: `runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04`
+- Base image: `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2204` (or override via `--build-arg BASE_IMAGE=...`)
 - System deps: `aria2`, `ffmpeg`, `git-lfs`
 - Repos:
   - `comfyanonymous/ComfyUI`
