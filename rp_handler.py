@@ -81,6 +81,9 @@ SERIALIZE_JOBS = os.getenv("SERIALIZE_JOBS", "true").strip().lower() in {
     "yes",
 }
 WAN_I2V_MAX_BATCH_SIZE = max(1, int(os.getenv("WAN_I2V_MAX_BATCH_SIZE", "1")))
+WAN_I2V_MAX_WIDTH = max(256, int(os.getenv("WAN_I2V_MAX_WIDTH", "832")))
+WAN_I2V_MAX_HEIGHT = max(256, int(os.getenv("WAN_I2V_MAX_HEIGHT", "480")))
+WAN_I2V_MAX_LENGTH = max(9, int(os.getenv("WAN_I2V_MAX_LENGTH", "33")))
 
 ALLOWED_MODEL_TYPES = {
     "checkpoints",
@@ -345,6 +348,36 @@ def _sanitize_workflow_inputs(workflow: dict[str, Any]) -> list[str]:
                     f"node {node_id}: clamped WanImageToVideo batch_size to {WAN_I2V_MAX_BATCH_SIZE}"
                 )
 
+            width = inputs.get("width")
+            if not isinstance(width, int) or width < 256:
+                inputs["width"] = 832
+                notes.append(f"node {node_id}: defaulted WanImageToVideo width to 832")
+            elif width > WAN_I2V_MAX_WIDTH:
+                inputs["width"] = WAN_I2V_MAX_WIDTH
+                notes.append(
+                    f"node {node_id}: clamped WanImageToVideo width to {WAN_I2V_MAX_WIDTH}"
+                )
+
+            height = inputs.get("height")
+            if not isinstance(height, int) or height < 256:
+                inputs["height"] = 480
+                notes.append(f"node {node_id}: defaulted WanImageToVideo height to 480")
+            elif height > WAN_I2V_MAX_HEIGHT:
+                inputs["height"] = WAN_I2V_MAX_HEIGHT
+                notes.append(
+                    f"node {node_id}: clamped WanImageToVideo height to {WAN_I2V_MAX_HEIGHT}"
+                )
+
+            length = inputs.get("length")
+            if not isinstance(length, int) or length < 9:
+                inputs["length"] = 33
+                notes.append(f"node {node_id}: defaulted WanImageToVideo length to 33")
+            elif length > WAN_I2V_MAX_LENGTH:
+                inputs["length"] = WAN_I2V_MAX_LENGTH
+                notes.append(
+                    f"node {node_id}: clamped WanImageToVideo length to {WAN_I2V_MAX_LENGTH}"
+                )
+
     return notes
 
 
@@ -360,7 +393,11 @@ def _runtime_hint(error_text: str, log_tail: str) -> str | None:
         return (
             "GPU out-of-memory detected. Reduce workflow memory pressure by lowering "
             "WanImageToVideo batch_size (recommended 1), frame length, or resolution. "
-            f"Current worker clamp WAN_I2V_MAX_BATCH_SIZE={WAN_I2V_MAX_BATCH_SIZE}."
+            "Current worker clamps "
+            f"WAN_I2V_MAX_BATCH_SIZE={WAN_I2V_MAX_BATCH_SIZE}, "
+            f"WAN_I2V_MAX_WIDTH={WAN_I2V_MAX_WIDTH}, "
+            f"WAN_I2V_MAX_HEIGHT={WAN_I2V_MAX_HEIGHT}, "
+            f"WAN_I2V_MAX_LENGTH={WAN_I2V_MAX_LENGTH}."
         )
     return None
 

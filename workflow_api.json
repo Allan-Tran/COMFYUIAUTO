@@ -143,10 +143,10 @@
   },
   "30": {
     "inputs": {
-      "width": 1280,
-      "height": 720,
-      "length": 81,
-      "batch_size": 16,
+      "width": 832,
+      "height": 480,
+      "length": 33,
+      "batch_size": 1,
       "positive": [
         "20",
         0
@@ -200,7 +200,7 @@
       "add_noise": "enable",
       "noise_seed": 42,
       "steps": 4,
-      "cfg": 1,
+      "cfg": 4.0,
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": 0,
@@ -232,12 +232,12 @@
     "inputs": {
       "add_noise": "disable",
       "noise_seed": 42,
-      "steps": 20,
-      "cfg": 1,
+      "steps": 16,
+      "cfg": 4.5,
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": 4,
-      "end_at_step": 20,
+      "end_at_step": 16,
       "return_with_leftover_noise": "disable",
       "model": [
         "32",
@@ -282,9 +282,9 @@
       "frame_rate": 16,
       "loop_count": 0,
       "filename_prefix": "video/h264-mp4",
-      "format": "video/h265-mp4",
-      "pix_fmt": "yuv420p10le",
-      "crf": 22,
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 16,
       "save_metadata": true,
       "pingpong": false,
       "save_output": true,
